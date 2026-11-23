@@ -1,0 +1,11 @@
+source,source_account_key,canonical_account_id,legal_name,product
+card_processor,card_tok_1001,A-1001,Riley Chen,card
+card_processor,card_tok_1005,A-1005,Riley Chen,card
+ach_network,026009593:1001,A-1001,Riley Chen,ach
+ach_network,121000248:1003,A-1003,Northwind Mortgage,ach
+brokerage,BRK-44002,A-1002,Riley Chen,brokerage
+brokerage,BRK-44008,A-1002,Riley Chen,brokerage
+loan_servicer,LN-9003,A-1003,Northwind Mortgage,loan
+loan_servicer,LN-9010,A-1007,Jordan Hale,loan
+treasury_wires,WIRE-1001,A-1001,Riley Chen,wire
+treasury_wires,WIRE-1004,A-1004,Harbor Treasury,wire

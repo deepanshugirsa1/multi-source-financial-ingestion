@@ -1,0 +1,152 @@
+# Data contracts for five financial sources.
+# Evolution policy: unknown payload fields are retained, missing required
+# fields and unknown schema versions are quarantined, and the envelope
+# event id must match the source id field for that version.
+version: 1
+partitions: 3
+consumer_group: spark-bronze
+accepted_currencies: [USD, EUR, GBP]
+evolution_policy:
+  unknown_fields: retain
+  missing_required: quarantine
+  unknown_version: quarantine
+  id_mismatch: quarantine
+sources:
+  - name: card_processor
+    topic: card.authorizations
+    description: Issuing-processor card authorizations. v1 sends decimal dollars; v2 sends minor units.
+    versions:
+      - version: "1.0"
+        event_id: authId
+        account_key: panToken
+        required: [authId, panToken, merchantId, amt, ccy, authTs, decision]
+        fields:
+          event_type: {const: card_authorization}
+          counterparty: {field: merchantId}
+          instrument: {field: panToken}
+          amount: {field: amt, scale: "1"}
+          currency: {field: ccy}
+          direction: {const: outflow}
+          event_ts: {field: authTs}
+          effective_date: {field: authTs, date: true}
+          status:
+            field: decision
+            map: {APPROVED: approved, DECLINED: declined}
+      - version: "2.0"
+        event_id: authorization_id
+        account_key: card_token
+        required: [authorization_id, card_token, merchant_id, amount_minor, currency, authorized_at, response_code]
+        fields:
+          event_type: {const: card_authorization}
+          counterparty: {field: merchant_id}
+          instrument: {field: card_token}
+          amount: {field: amount_minor, scale: "0.01"}
+          currency: {field: currency}
+          direction: {const: outflow}
+          event_ts: {field: authorized_at}
+          effective_date: {field: authorized_at, date: true}
+          status:
+            field: response_code
+            map: {"00": approved, "05": declined}
+
+  - name: ach_network
+    topic: ach.transfers
+    description: ACH entries keyed by trace number. Direction is from the firm's book.
+    versions:
+      - version: "1.0"
+        event_id: trace_number
+        account_key: odfi_account
+        required: [trace_number, odfi_account, rdfi_account, amount, sec_code, effective_entry_date, event_time, status, direction]
+        fields:
+          event_type: {const: ach_transfer}
+          counterparty: {field: rdfi_account}
+          instrument: {field: sec_code}
+          amount: {field: amount, scale: "1"}
+          currency: {const: USD}
+          direction:
+            field: direction
+            map: {CREDIT: inflow, DEBIT: outflow}
+          event_ts: {field: event_time}
+          effective_date: {field: effective_entry_date, date: true}
+          status:
+            field: status
+            map: {POSTED: posted, PENDING: pending, RETURNED: returned}
+
+  - name: brokerage
+    topic: brokerage.trades
+    description: Executed trades. Cash amount is quantity times price. Buys spend cash.
+    versions:
+      - version: "1.0"
+        event_id: trade_id
+        account_key: account_number
+        required: [trade_id, account_number, symbol, side, quantity, price, trade_time, settlement_date]
+        fields:
+          event_type: {const: brokerage_trade}
+          counterparty: {const: exchange}
+          instrument: {field: symbol}
+          amount: {multiply: [quantity, price], scale: "1"}
+          currency: {const: USD}
+          direction:
+            field: side
+            map: {BUY: outflow, SELL: inflow}
+          event_ts: {field: trade_time}
+          effective_date: {field: settlement_date, date: true}
+          status: {const: filled}
+
+  - name: loan_servicer
+    topic: loans.payments
+    description: Loan payments received by the servicer. v2 adds fee and remaining balance.
+    versions:
+      - version: "1.0"
+        event_id: payment_ref
+        account_key: loan_number
+        required: [payment_ref, loan_number, borrower_id, payment_amount, principal, interest, paid_at, payment_status]
+        fields:
+          event_type: {const: loan_payment}
+          counterparty: {field: borrower_id}
+          instrument: {field: loan_number}
+          amount: {field: payment_amount, scale: "1"}
+          currency: {const: USD}
+          direction: {const: inflow}
+          event_ts: {field: paid_at}
+          effective_date: {field: paid_at, date: true}
+          status:
+            field: payment_status
+            map: {POSTED: posted, REVERSED: reversed}
+      - version: "2.0"
+        event_id: payment_id
+        account_key: loan_id
+        required: [payment_id, loan_id, borrower_id, payment_amount, principal, interest, fee_amount, remaining_balance, paid_at, payment_status]
+        fields:
+          event_type: {const: loan_payment}
+          counterparty: {field: borrower_id}
+          instrument: {field: loan_id}
+          amount: {field: payment_amount, scale: "1"}
+          currency: {const: USD}
+          direction: {const: inflow}
+          event_ts: {field: paid_at}
+          effective_date: {field: paid_at, date: true}
+          status:
+            field: payment_status
+            map: {POSTED: posted, REVERSED: reversed}
+
+  - name: treasury_wires
+    topic: treasury.wires
+    description: Outbound treasury wires keyed by IMAD. Amount is the instructed amount.
+    versions:
+      - version: "1.0"
+        event_id: wire_imad
+        account_key: debtor_account
+        required: [wire_imad, debtor_account, creditor_account, instructed_amount, currency, value_date, uetr, event_time, status]
+        fields:
+          event_type: {const: wire_transfer}
+          counterparty: {field: creditor_account}
+          instrument: {field: uetr}
+          amount: {field: instructed_amount, scale: "1"}
+          currency: {field: currency}
+          direction: {const: outflow}
+          event_ts: {field: event_time}
+          effective_date: {field: value_date, date: true}
+          status:
+            field: status
+            map: {SETTLED: settled, PENDING: pending}

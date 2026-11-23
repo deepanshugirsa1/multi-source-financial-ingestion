@@ -1,0 +1,25 @@
+select
+    canonical_event_id,
+    source_system,
+    source_event_id,
+    schema_version,
+    event_type,
+    canonical_account_id,
+    source_account_key,
+    identity_status,
+    counterparty,
+    instrument,
+    cast(amount as decimal(18, 2)) as amount,
+    currency,
+    direction,
+    cast(replace(replace(event_ts, 'T', ' '), 'Z', '') as timestamp) as event_ts,
+    cast(effective_date as date) as effective_date,
+    status,
+    attributes_json,
+    kafka_topic,
+    kafka_partition,
+    kafka_offset,
+    batch_id,
+    cast(replace(replace(ingested_at, 'T', ' '), 'Z', '') as timestamp) as ingested_at
+from read_parquet('{{ env_var("FININGEST_SILVER_GLOB") }}', union_by_name=true)
+where canonical_event_id is not null

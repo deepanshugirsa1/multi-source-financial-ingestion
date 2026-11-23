@@ -1,0 +1,74 @@
+version: 2
+
+models:
+  - name: stg_canonical_events
+    description: Schema-valid silver events, including unresolved identities.
+    columns:
+      - name: canonical_event_id
+        tests: [unique, not_null]
+      - name: amount
+        tests: [not_null]
+      - name: currency
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["USD", "EUR", "GBP"]
+      - name: direction
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ["inflow", "outflow"]
+      - name: identity_status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["resolved", "unresolved"]
+      - name: status
+        tests:
+          - accepted_values:
+              arguments:
+                values: ["approved", "declined", "posted", "pending", "returned", "filled", "reversed", "settled"]
+
+  - name: fct_financial_events
+    description: Resolved canonical events used by downstream cash reporting.
+    columns:
+      - name: canonical_event_id
+        tests: [unique, not_null]
+      - name: canonical_account_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_account')
+                field: canonical_account_id
+      - name: amount
+        tests: [not_null]
+
+  - name: fct_account_daily
+    description: Settled and authorized cash by account, day, and currency.
+    columns:
+      - name: canonical_account_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_account')
+                field: canonical_account_id
+      - name: net_amount
+        tests: [not_null]
+
+  - name: dim_account
+    description: One row per canonical account in the identity crosswalk.
+    columns:
+      - name: canonical_account_id
+        tests: [unique, not_null]
+
+  - name: stg_quarantine
+    description: Contract failures kept out of silver.
+    columns:
+      - name: reason
+        tests: [not_null]
+      - name: event_id
+        tests: [not_null]

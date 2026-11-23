@@ -1,0 +1,17 @@
+name: finingest
+version: "1.0.0"
+config-version: 2
+profile: finingest
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages", "logs"]
+
+models:
+  finingest:
+    staging:
+      +materialized: view
+    gold:
+      +materialized: table

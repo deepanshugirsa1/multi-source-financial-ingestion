@@ -1,0 +1,10 @@
+# Observability thresholds checked after each pipeline run.
+max_quarantine_rate: 0.05
+max_unresolved_identity_rate: 0.10
+max_duplicate_rate: 0.10
+freshness_hours:
+  card_processor: 24
+  ach_network: 24
+  brokerage: 24
+  loan_servicer: 48
+  treasury_wires: 24
