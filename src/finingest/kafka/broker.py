@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 
@@ -30,7 +30,12 @@ class BrokerLog:
             key_serializer=lambda key: key.encode("utf-8"),
             value_serializer=lambda value: json.dumps(value).encode("utf-8"),
             acks="all",
+            retries=5,
+            linger_ms=20,
+            batch_size=65536,
+            max_block_ms=120000,
         )
+        failures: list[str] = []
         try:
             for event in events:
                 topic = bundle.topic_for(event.envelope.source)
@@ -40,10 +45,12 @@ class BrokerLog:
                     key=event.key,
                     value=event.envelope.to_dict(),
                     partition=partition,
-                )
+                ).add_errback(lambda exc: failures.append(repr(exc)))
             producer.flush()
         finally:
             producer.close()
+        if failures:
+            raise RuntimeError(f"{len(failures)} records were not acknowledged by the broker: {failures[0]}")
 
     def read_after(self, committed: dict[str, dict[str, int]], limit: int = 5000) -> list[KafkaRecord]:
         from kafka import KafkaConsumer, TopicPartition
@@ -108,3 +115,25 @@ class BrokerLog:
                 pass
         finally:
             admin.close()
+
+    def reset_topics(self, timeout: float = 20.0) -> None:
+        """Delete and recreate this project's topics so a reset clears the broker too."""
+        import time
+
+        from kafka.admin import KafkaAdminClient
+        from kafka.errors import UnknownTopicOrPartitionError
+
+        admin = KafkaAdminClient(bootstrap_servers=self.bootstrap, client_id="finingest")
+        try:
+            try:
+                admin.delete_topics(list(self.bundle.topics()))
+            except UnknownTopicOrPartitionError:
+                pass
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                if not set(self.bundle.topics()) & set(admin.list_topics()):
+                    break
+                time.sleep(0.5)
+        finally:
+            admin.close()
+        self._ensure_topics()

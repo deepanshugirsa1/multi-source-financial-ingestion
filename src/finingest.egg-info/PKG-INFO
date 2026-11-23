@@ -1,0 +1,133 @@
+Metadata-Version: 2.4
+Name: finingest
+Version: 0.1.0
+Summary: Multi-source financial data ingestion platform
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: pyarrow>=14.0
+Requires-Dist: duckdb>=1.1.0
+Requires-Dist: dbt-core<2,>=1.8.0
+Requires-Dist: dbt-duckdb<2,>=1.8.0
+Requires-Dist: boto3>=1.34.0
+Requires-Dist: kafka-python>=2.0.2
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Provides-Extra: spark
+Requires-Dist: pyspark==3.5.3; extra == "spark"
+
+# Multi-Source Financial Data Ingestion Platform
+
+Synthetic financial events from five systems land on a partitioned log, get enforced and deduplicated in a streaming micro-batch, and come out as tested silver and gold datasets.
+
+The records are generated. They are not customer data.
+
+## Stack
+
+Python, a Kafka-compatible log, Spark Structured Streaming, S3-compatible object storage, Airflow, dbt, Docker, and GitHub Actions.
+
+Local runs use an on-disk log with the same partition, offset, and commit behavior as the broker. `docker-compose.yml` starts Kafka and MinIO when you want the real services. The Spark job is the long-running consumer; CI runs the same processor without a JVM.
+
+## Sources
+
+| Source | Topic | Identity field | Versions |
+| --- | --- | --- | --- |
+| Card processor | `card.authorizations` | `authId` or `authorization_id` | 1.0 decimal dollars, 2.0 minor units |
+| ACH network | `ach.transfers` | `trace_number` | 1.0 |
+| Brokerage | `brokerage.trades` | `trade_id` | 1.0, cash amount is quantity times price |
+| Loan servicer | `loans.payments` | `payment_ref` or `payment_id` | 1.0, and 2.0 adds fee and remaining balance |
+| Treasury wires | `treasury.wires` | `wire_imad` | 1.0 |
+
+Contracts live in `contracts/sources.yaml`. Unknown payload fields are kept. A missing required field, an unknown schema version, or an event id that does not match the payload is quarantined. Account keys are mapped through `transform/seeds/identity_crosswalk.csv`. An unknown account stays in silver as `unresolved` and is left out of gold.
+
+Amounts are from the firm's book. Card spend, ACH debits, buys, and outbound wires are outflows. ACH credits, sells, and loan payments are inflows.
+
+## Path
+
+```text
+connectors
+  -> partitioned log (3 partitions, crc32 of the account key)
+  -> micro-batch: contract, exact dedupe, identity
+  -> bronze/raw, bronze/quarantine, bronze/replay, silver/canonical
+  -> dbt: dim_account, fct_financial_events, fct_account_daily
+  -> freshness, rates, lineage, failure log
+```
+
+Bronze raw keeps the first delivery, including duplicates and bad payloads. Silver keeps the first valid copy of each source event id. A replay reads the log from offset 0, appends `bronze/replay`, and does not move the consumer offsets or insert a second silver row.
+
+Checkpoints commit only after the parquet part files are in place. The part name is the batch id, so a crash between the write and the commit overwrites that part instead of appending a second copy. Spark uses the same rule: `foreachBatch` returns immediately when that batch id is already committed.
+
+Exact dedupe is intentional. A watermark `dropDuplicates` would drop a late settlement, so the seen-set is stored in the checkpoint instead.
+
+## Run
+
+```powershell
+cd portfolio_projects\multi-source-financial-ingestion
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+python scripts\run_e2e.py
+```
+
+If `pip install` fails with `No such file or directory` under `.venv`, the repo path is past Windows' legacy path limit. Use a shorter environment and the same scripts:
+
+```powershell
+python -m venv $env:USERPROFILE\venvs\finingest
+& "$env:USERPROFILE\venvs\finingest\Scripts\python.exe" -m pip install -r requirements.txt
+& "$env:USERPROFILE\venvs\finingest\Scripts\python.exe" scripts\run_e2e.py
+```
+
+The command publishes 10 events from each source plus two duplicates, two contract failures, and one unmapped wire. It drains the log, replays it, and builds the dbt project. This repo is in OneDrive, which locks `data\checkpoints` and makes reset fail with `Access is denied`, so the run writes to `%LOCALAPPDATA%\finingest`. The summary JSON includes that path. The report is `observability\report.json` inside it.
+
+```powershell
+python scripts\emit_events.py --suffix -b2
+python scripts\replay.py --reason manual-check
+python scripts\run_e2e.py --resume
+```
+
+`--resume` continues from the committed offsets and does not republish.
+
+## Kafka, MinIO, Spark, Airflow
+
+```powershell
+docker compose up -d kafka minio create-bucket
+$env:FININGEST_KAFKA_BOOTSTRAP = "localhost:9092"
+$env:FININGEST_S3_ENDPOINT = "http://localhost:9000"
+$env:FININGEST_S3_BUCKET = "financial-lake"
+$env:FININGEST_S3_ACCESS_KEY = "minio"
+$env:FININGEST_S3_SECRET_KEY = "minioadmin"
+python scripts\run_e2e.py --transport kafka
+```
+
+MinIO receives a mirror of the local parquet layout. dbt still reads the local files, which keeps the transform runnable when the object store is down.
+
+Spark, after a JDK and `pip install -r requirements-spark.txt`:
+
+```powershell
+spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.3 src\finingest\streaming\spark_job.py
+```
+
+Airflow loads `orchestration/dags/financial_ingestion.py`. The DAG is `validate_contracts >> publish_events >> stream_to_lake >> replay_history >> dbt_build >> data_quality`. Those callables are the functions under test in CI. Set the Airflow `dags_folder` to `orchestration/dags`.
+
+`docker compose --profile pipeline run --rm pipeline` runs the local end-to-end path inside the image.
+
+## Tests
+
+```powershell
+python -m pytest -q
+```
+
+GitHub Actions does the same on Python 3.11. The suite covers schema versions, minor-unit amounts, trade notionals, quarantine, partition assignment, crash recovery, replay, a second batch, and a full dbt build with tie-out tests.
+
+## Layout
+
+```text
+contracts/            source contracts and freshness SLAs
+src/finingest/        connectors, log, processor, lake, quality checks
+spark job             src/finingest/streaming/spark_job.py
+transform/            dbt staging views, gold tables, seeds, tests
+orchestration/dags/   Airflow DAG
+scripts/              end-to-end run, emit, replay
+```
+
+Gold cashflow counts `approved`, `posted`, `filled`, and `settled` only. Declines, returns, reversals, and pending wires stay on `fct_financial_events` and stay out of `fct_account_daily`.

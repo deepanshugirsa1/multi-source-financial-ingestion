@@ -67,6 +67,7 @@ def publish_events(
     per_source: int = 10,
     include_faults: bool = True,
     transport: str = "local",
+    reset_topics: bool = False,
     id_suffix: str = "",
     **_context,
 ) -> dict:
@@ -81,6 +82,8 @@ def publish_events(
     )
     if transport == "kafka":
         broker = BrokerLog(os.environ["FININGEST_KAFKA_BOOTSTRAP"], bundle, bundle.raw["consumer_group"])
+        if reset_topics:
+            broker.reset_topics()
         broker.append(events, bundle)
     else:
         paths = state_paths(state_root)
@@ -220,6 +223,7 @@ def run_pipeline(
         per_source=per_source,
         include_faults=include_faults,
         transport=transport,
+        reset_topics=reset,
     )
     before = stream_to_lake(root, state_root, transport=transport)
     replay_result = replay_log(root, state_root, transport=transport)
